@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "start-stop-tracker"
+rootProject.name = "sailing-coaching-app"
 include(":app")

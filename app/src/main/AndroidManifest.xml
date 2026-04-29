@@ -7,7 +7,7 @@
         android:required="false" />
 
     <application
-        android:label="Start/Stop"
+        android:label="Sailing Coach"
         android:allowBackup="false"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
