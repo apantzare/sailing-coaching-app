@@ -2,13 +2,13 @@ package se.pantzare.startstop
 
 import android.location.Location
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -20,10 +20,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,19 +34,24 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
@@ -60,9 +63,11 @@ import kotlin.math.sin
 fun CourseScreen(repository: Repository, location: State<Location?>) {
     val measurements = repository.data.measurements
     val marks = repository.data.marks
+    val windFromDeg = repository.data.windFromDeg
 
     var showAdd by remember { mutableStateOf<MarkKind?>(null) }
     var showManage by remember { mutableStateOf(false) }
+    var showWind by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         ActionBar(
@@ -71,6 +76,15 @@ fun CourseScreen(repository: Repository, location: State<Location?>) {
             onAddMark = { showAdd = MarkKind.MARK },
             onAddBoat = { showAdd = MarkKind.BOAT },
             onManage = { showManage = true },
+        )
+        WindBar(
+            windFromDeg = windFromDeg,
+            onEdit = { showWind = true },
+        )
+        Text(
+            "Drag marks/boats to reposition. Measurements stay at their GPS location.",
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
         )
         Box(modifier = Modifier.fillMaxSize()) {
             if (measurements.isEmpty() && marks.isEmpty()) {
@@ -84,7 +98,14 @@ fun CourseScreen(repository: Repository, location: State<Location?>) {
                     )
                 }
             } else {
-                CourseCanvas(measurements = measurements, marks = marks)
+                CourseCanvas(
+                    measurements = measurements,
+                    marks = marks,
+                    windFromDeg = windFromDeg,
+                    onMarkMoved = { id, lat, lng ->
+                        repository.updateMarkPosition(id, lat, lng)
+                    },
+                )
             }
         }
     }
@@ -105,6 +126,93 @@ fun CourseScreen(repository: Repository, location: State<Location?>) {
             onDismiss = { showManage = false },
         )
     }
+
+    if (showWind) {
+        WindDialog(
+            initialDeg = windFromDeg,
+            onDismiss = { showWind = false },
+            onSave = {
+                repository.setWindDirection(it)
+                showWind = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun WindBar(windFromDeg: Double?, onEdit: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (windFromDeg == null) "Wind: not set"
+            else "Wind from ${cardinal(windFromDeg)} ${windFromDeg.roundToInt()}°",
+            fontSize = 13.sp,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(onClick = onEdit) {
+            Text(if (windFromDeg == null) "Set wind" else "Edit")
+        }
+    }
+}
+
+@Composable
+private fun WindDialog(
+    initialDeg: Double?,
+    onDismiss: () -> Unit,
+    onSave: (Double?) -> Unit,
+) {
+    var text by remember { mutableStateOf(initialDeg?.roundToInt()?.toString() ?: "") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Wind direction") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Compass bearing the wind is coming FROM (0–360°). " +
+                            "The course view rotates so this direction is at the top.",
+                    fontSize = 13.sp,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it.filter { c -> c.isDigit() || c == '.' }
+                        error = null
+                    },
+                    singleLine = true,
+                    label = { Text("Degrees from north") },
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Done,
+                        keyboardType = KeyboardType.Number,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsed = text.toDoubleOrNull()
+                if (parsed == null || parsed < 0.0 || parsed > 360.0) {
+                    error = "Enter a number between 0 and 360"
+                } else {
+                    onSave(parsed)
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onSave(null) }) { Text("Clear") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -161,7 +269,8 @@ private fun AddMarkDialog(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (location != null) {
                     Text(
-                        "Will record at current GPS (±${location.accuracy.roundToInt()} m)",
+                        "Will record at current GPS (±${location.accuracy.roundToInt()} m). " +
+                                "You can drag it on the canvas afterwards.",
                         fontSize = 14.sp,
                     )
                 } else {
@@ -205,19 +314,21 @@ private fun AddMarkDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val label = selectedLabel ?: return@TextButton
-                    val loc = location ?: return@TextButton
-                    repository.addMark(
-                        CourseMark(
-                            kind = kind,
-                            label = label,
-                            lat = loc.latitude,
-                            lng = loc.longitude,
-                            accuracyM = loc.accuracy.toDouble(),
-                            timestampMs = System.currentTimeMillis(),
+                    val label = selectedLabel
+                    val loc = location
+                    if (label != null && loc != null) {
+                        repository.addMark(
+                            CourseMark(
+                                kind = kind,
+                                label = label,
+                                lat = loc.latitude,
+                                lng = loc.longitude,
+                                accuracyM = loc.accuracy.toDouble(),
+                                timestampMs = System.currentTimeMillis(),
+                            )
                         )
-                    )
-                    onDismiss()
+                        onDismiss()
+                    }
                 },
                 enabled = selectedLabel != null && location != null,
             ) { Text("Save") }
@@ -317,10 +428,7 @@ private fun ManageMarksDialog(
                                         "${if (m.kind == MarkKind.MARK) "Mark" else "Boat"}: ${m.label}",
                                         fontWeight = FontWeight.Medium,
                                     )
-                                    Text(
-                                        "±${m.accuracyM.roundToInt()} m",
-                                        fontSize = 12.sp,
-                                    )
+                                    Text("±${m.accuracyM.roundToInt()} m original GPS", fontSize = 12.sp)
                                 }
                                 IconButton(onClick = { onDelete(m.id) }) {
                                     Icon(Icons.Filled.Delete, contentDescription = "Delete")
@@ -337,189 +445,380 @@ private fun ManageMarksDialog(
     )
 }
 
+private data class ProjectionParams(
+    val canvasW: Float,
+    val canvasH: Float,
+    val midLat: Double,
+    val midLng: Double,
+    val metersPerDegLat: Double,
+    val metersPerDegLng: Double,
+    val scale: Float,
+    val rotationDeg: Double,
+) {
+    private val rotRad get() = Math.toRadians(rotationDeg)
+
+    fun project(lat: Double, lng: Double): Offset {
+        val xMeters = (lng - midLng) * metersPerDegLng
+        val yMeters = (lat - midLat) * metersPerDegLat
+        val cosR = cos(rotRad)
+        val sinR = sin(rotRad)
+        val xMRot = xMeters * cosR - yMeters * sinR
+        val yMRot = xMeters * sinR + yMeters * cosR
+        return Offset(
+            canvasW / 2f + (xMRot * scale).toFloat(),
+            canvasH / 2f - (yMRot * scale).toFloat(),
+        )
+    }
+
+    fun unproject(p: Offset): Pair<Double, Double> {
+        val xMRot = (p.x - canvasW / 2f) / scale
+        val yMRot = (canvasH / 2f - p.y) / scale
+        val cosR = cos(rotRad)
+        val sinR = sin(rotRad)
+        val xM = xMRot * cosR + yMRot * sinR
+        val yM = -xMRot * sinR + yMRot * cosR
+        val lng = midLng + xM / metersPerDegLng
+        val lat = midLat + yM / metersPerDegLat
+        return lat to lng
+    }
+}
+
+private fun computeProjection(
+    canvasSize: IntSize,
+    measurements: List<SavedMeasurement>,
+    marks: List<CourseMark>,
+    innerPadding: Float,
+    rotationDeg: Double,
+): ProjectionParams? {
+    val lats = measurements.map { it.startLat } + marks.map { it.lat }
+    val lngs = measurements.map { it.startLng } + marks.map { it.lng }
+    if (lats.isEmpty() || canvasSize.width == 0 || canvasSize.height == 0) return null
+
+    val minLat = lats.min()
+    val maxLat = lats.max()
+    val minLng = lngs.min()
+    val maxLng = lngs.max()
+    val midLat = (minLat + maxLat) / 2
+    val midLng = (minLng + maxLng) / 2
+    val midLatRad = Math.toRadians(midLat)
+
+    val metersPerDegLat = 111_320.0
+    val metersPerDegLng = 111_320.0 * cos(midLatRad)
+
+    val rotRad = Math.toRadians(rotationDeg)
+    val cosR = cos(rotRad)
+    val sinR = sin(rotRad)
+
+    val rotatedXs = mutableListOf<Double>()
+    val rotatedYs = mutableListOf<Double>()
+    measurements.forEach {
+        val xm = (it.startLng - midLng) * metersPerDegLng
+        val ym = (it.startLat - midLat) * metersPerDegLat
+        rotatedXs += xm * cosR - ym * sinR
+        rotatedYs += xm * sinR + ym * cosR
+    }
+    marks.forEach {
+        val xm = (it.lng - midLng) * metersPerDegLng
+        val ym = (it.lat - midLat) * metersPerDegLat
+        rotatedXs += xm * cosR - ym * sinR
+        rotatedYs += xm * sinR + ym * cosR
+    }
+    val widthMeters = (rotatedXs.max() - rotatedXs.min()).coerceAtLeast(50.0)
+    val heightMeters = (rotatedYs.max() - rotatedYs.min()).coerceAtLeast(50.0)
+
+    val availW = (canvasSize.width - innerPadding * 2).coerceAtLeast(1f)
+    val availH = (canvasSize.height - innerPadding * 2).coerceAtLeast(1f)
+    val scale = min(availW / widthMeters, availH / heightMeters).toFloat()
+
+    return ProjectionParams(
+        canvasW = canvasSize.width.toFloat(),
+        canvasH = canvasSize.height.toFloat(),
+        midLat = midLat,
+        midLng = midLng,
+        metersPerDegLat = metersPerDegLat,
+        metersPerDegLng = metersPerDegLng,
+        scale = scale,
+        rotationDeg = rotationDeg,
+    )
+}
+
 @Composable
-private fun CourseCanvas(measurements: List<SavedMeasurement>, marks: List<CourseMark>) {
+private fun CourseCanvas(
+    measurements: List<SavedMeasurement>,
+    marks: List<CourseMark>,
+    windFromDeg: Double?,
+    onMarkMoved: (id: String, lat: Double, lng: Double) -> Unit,
+) {
     val textMeasurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val onSurface = MaterialTheme.colorScheme.onSurface
     val surface = MaterialTheme.colorScheme.surface
     val measurementColor = MaterialTheme.colorScheme.primary
-    val markColor = Color(0xFFFF9800) // orange
-    val boatColor = Color(0xFF455A64) // slate gray
+    val markColor = Color(0xFFFF9800)
+    val boatColor = Color(0xFF455A64)
+    val windColor = Color(0xFF1976D2)
 
-    Canvas(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        val canvasW = size.width
-        val canvasH = size.height
-        val padding = 60f
+    val innerPadPx = 60f
+    val hitRadiusPx = with(density) { 28.dp.toPx() }
+    val rotationDeg = windFromDeg ?: 0.0
 
-        // Combine all positions for bounding box.
-        val lats = measurements.map { it.startLat } + marks.map { it.lat }
-        val lngs = measurements.map { it.startLng } + marks.map { it.lng }
-        if (lats.isEmpty()) return@Canvas
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val projection = remember(canvasSize, measurements, marks, rotationDeg) {
+        computeProjection(canvasSize, measurements, marks, innerPadPx, rotationDeg)
+    }
 
-        val minLat = lats.min()
-        val maxLat = lats.max()
-        val minLng = lngs.min()
-        val maxLng = lngs.max()
-        val midLat = (minLat + maxLat) / 2
-        val midLng = (minLng + maxLng) / 2
-        val midLatRad = Math.toRadians(midLat)
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var currentTouchPos by remember { mutableStateOf(Offset.Zero) }
+    var anchorOffset by remember { mutableStateOf(Offset.Zero) }
 
-        val metersPerDegLat = 111_320.0
-        val metersPerDegLng = 111_320.0 * cos(midLatRad)
+    val marksRef = rememberUpdatedState(marks)
+    val projRef = rememberUpdatedState(projection)
+    val onMarkMovedRef = rememberUpdatedState(onMarkMoved)
 
-        val widthMeters = ((maxLng - minLng) * metersPerDegLng).coerceAtLeast(50.0)
-        val heightMeters = ((maxLat - minLat) * metersPerDegLat).coerceAtLeast(50.0)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .onSizeChanged { canvasSize = it }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        val proj = projRef.value
+                        val mks = marksRef.value
+                        if (proj != null) {
+                            val hit = mks.minByOrNull { m ->
+                                (proj.project(m.lat, m.lng) - offset).getDistance()
+                            }
+                            if (hit != null) {
+                                val mp = proj.project(hit.lat, hit.lng)
+                                if ((mp - offset).getDistance() <= hitRadiusPx) {
+                                    draggingId = hit.id
+                                    currentTouchPos = offset
+                                    anchorOffset = mp - offset
+                                }
+                            }
+                        }
+                    },
+                    onDrag = { change, dragAmount ->
+                        if (draggingId != null) {
+                            currentTouchPos += dragAmount
+                            change.consume()
+                        }
+                    },
+                    onDragEnd = {
+                        val id = draggingId
+                        val proj = projRef.value
+                        if (id != null && proj != null) {
+                            val finalPos = currentTouchPos + anchorOffset
+                            val (lat, lng) = proj.unproject(finalPos)
+                            onMarkMovedRef.value(id, lat, lng)
+                        }
+                        draggingId = null
+                        currentTouchPos = Offset.Zero
+                        anchorOffset = Offset.Zero
+                    },
+                    onDragCancel = {
+                        draggingId = null
+                        currentTouchPos = Offset.Zero
+                        anchorOffset = Offset.Zero
+                    },
+                )
+            },
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val proj = projection ?: return@Canvas
 
-        val availW = canvasW - padding * 2
-        val availH = canvasH - padding * 2
-        val scale = min(availW / widthMeters, availH / heightMeters).toFloat()
+            val maxKnots = measurements.maxOfOrNull { it.knots }?.coerceAtLeast(0.01) ?: 1.0
+            val maxArrowPx = with(density) { 80.dp.toPx() }
+            val minArrowPx = with(density) { 16.dp.toPx() }
+            val measureRadius = with(density) { 5.dp.toPx() }
+            val markRadius = with(density) { 8.dp.toPx() }
+            val labelStyle = TextStyle(fontSize = 12.sp, color = onSurface)
+            val velocityStyle = TextStyle(fontSize = 11.sp, color = onSurface)
 
-        fun project(lat: Double, lng: Double): Offset {
-            val xMeters = (lng - midLng) * metersPerDegLng
-            val yMeters = (lat - midLat) * metersPerDegLat
-            val x = canvasW / 2f + (xMeters * scale).toFloat()
-            val y = canvasH / 2f - (yMeters * scale).toFloat()
-            return Offset(x, y)
-        }
-
-        val maxKnots = measurements.maxOfOrNull { it.knots }?.coerceAtLeast(0.01) ?: 1.0
-        val maxArrowPx = with(density) { 80.dp.toPx() }
-        val minArrowPx = with(density) { 16.dp.toPx() }
-        val measureRadius = with(density) { 5.dp.toPx() }
-        val markRadius = with(density) { 8.dp.toPx() }
-        val labelStyle = TextStyle(fontSize = 12.sp, color = onSurface)
-        val velocityStyle = TextStyle(fontSize = 11.sp, color = onSurface)
-
-        // Marks first (under the arrows).
-        marks.forEach { m ->
-            val pos = project(m.lat, m.lng)
-            when (m.kind) {
-                MarkKind.MARK -> {
-                    drawCircle(color = surface, radius = markRadius + 2f, center = pos)
-                    drawCircle(color = markColor, radius = markRadius, center = pos)
+            // Marks first (under the arrows).
+            marks.forEach { m ->
+                val isDragging = m.id == draggingId
+                val pos = if (isDragging) currentTouchPos + anchorOffset else proj.project(m.lat, m.lng)
+                val highlightBoost = if (isDragging) 4f else 0f
+                when (m.kind) {
+                    MarkKind.MARK -> {
+                        drawCircle(color = surface, radius = markRadius + 2f + highlightBoost, center = pos)
+                        drawCircle(color = markColor, radius = markRadius + highlightBoost, center = pos)
+                    }
+                    MarkKind.BOAT -> {
+                        val w = with(density) { 22.dp.toPx() } + highlightBoost
+                        val h = with(density) { 10.dp.toPx() } + highlightBoost
+                        drawRect(
+                            color = surface,
+                            topLeft = Offset(pos.x - w / 2 - 2f, pos.y - h / 2 - 2f),
+                            size = Size(w + 4f, h + 4f),
+                        )
+                        drawRect(
+                            color = boatColor,
+                            topLeft = Offset(pos.x - w / 2, pos.y - h / 2),
+                            size = Size(w, h),
+                        )
+                    }
                 }
-                MarkKind.BOAT -> {
-                    val w = with(density) { 22.dp.toPx() }
-                    val h = with(density) { 10.dp.toPx() }
-                    drawRect(
-                        color = surface,
-                        topLeft = Offset(pos.x - w / 2 - 2f, pos.y - h / 2 - 2f),
-                        size = Size(w + 4f, h + 4f),
-                    )
-                    drawRect(
-                        color = boatColor,
-                        topLeft = Offset(pos.x - w / 2, pos.y - h / 2),
-                        size = Size(w, h),
-                    )
-                }
+                val labelLayout = textMeasurer.measure(m.label, labelStyle)
+                drawText(
+                    textLayoutResult = labelLayout,
+                    topLeft = Offset(pos.x + markRadius + 4f, pos.y - labelLayout.size.height - 2f),
+                )
             }
-            val labelLayout = textMeasurer.measure(m.label, labelStyle)
-            drawText(
-                textLayoutResult = labelLayout,
-                topLeft = Offset(pos.x + markRadius + 4f, pos.y - labelLayout.size.height - 2f),
-            )
-        }
 
-        // Measurements with arrows on top.
-        measurements.forEach { mm ->
-            val pos = project(mm.startLat, mm.startLng)
-            val ratio = (mm.knots / maxKnots).toFloat().coerceIn(0f, 1f)
-            val arrowLen = (minArrowPx + ratio * (maxArrowPx - minArrowPx))
-            val bearingRad = Math.toRadians(mm.bearingDeg)
-            val tipX = pos.x + (sin(bearingRad) * arrowLen).toFloat()
-            val tipY = pos.y - (cos(bearingRad) * arrowLen).toFloat()
+            // Measurements with arrows on top.
+            measurements.forEach { mm ->
+                val pos = proj.project(mm.startLat, mm.startLng)
+                val ratio = (mm.knots / maxKnots).toFloat().coerceIn(0f, 1f)
+                val arrowLen = (minArrowPx + ratio * (maxArrowPx - minArrowPx))
+                val bearingRad = Math.toRadians(mm.bearingDeg)
+                val tipX = pos.x + (sin(bearingRad) * arrowLen).toFloat()
+                val tipY = pos.y - (cos(bearingRad) * arrowLen).toFloat()
 
+                drawLine(
+                    color = measurementColor,
+                    start = pos,
+                    end = Offset(tipX, tipY),
+                    strokeWidth = 3f,
+                )
+                val barbAngle = Math.toRadians(28.0)
+                val barbLen = with(density) { 8.dp.toPx() }
+                val b = bearingRad
+                val barb1 = Offset(
+                    tipX - (sin(b + barbAngle) * barbLen).toFloat(),
+                    tipY + (cos(b + barbAngle) * barbLen).toFloat(),
+                )
+                val barb2 = Offset(
+                    tipX - (sin(b - barbAngle) * barbLen).toFloat(),
+                    tipY + (cos(b - barbAngle) * barbLen).toFloat(),
+                )
+                drawLine(measurementColor, Offset(tipX, tipY), barb1, strokeWidth = 3f)
+                drawLine(measurementColor, Offset(tipX, tipY), barb2, strokeWidth = 3f)
+
+                drawCircle(color = surface, radius = measureRadius + 2f, center = pos)
+                drawCircle(color = measurementColor, radius = measureRadius, center = pos)
+
+                val labelLayout = textMeasurer.measure(mm.positionLabel, labelStyle)
+                drawText(
+                    textLayoutResult = labelLayout,
+                    topLeft = Offset(pos.x + measureRadius + 4f, pos.y - labelLayout.size.height - 2f),
+                )
+                val vText = "${"%.2f".format(mm.knots)} kn"
+                val vLayout = textMeasurer.measure(vText, velocityStyle)
+                drawText(
+                    textLayoutResult = vLayout,
+                    topLeft = Offset(pos.x + measureRadius + 4f, pos.y + 2f),
+                )
+            }
+
+            // North indicator: arrow pointing where actual north is (relative to rotation).
+            val rotRad = Math.toRadians(rotationDeg)
+            val northDirX = (-sin(rotRad)).toFloat()
+            val northDirY = (-cos(rotRad)).toFloat()
+            val northCx = proj.canvasW - 36f
+            val northCy = 40f
+            val northLen = with(density) { 22.dp.toPx() }
+            val northTipX = northCx + northDirX * northLen
+            val northTipY = northCy + northDirY * northLen
             drawLine(
-                color = measurementColor,
-                start = pos,
-                end = Offset(tipX, tipY),
+                color = onSurface,
+                start = Offset(northCx - northDirX * 4f, northCy - northDirY * 4f),
+                end = Offset(northTipX, northTipY),
                 strokeWidth = 3f,
             )
-            val barbAngle = Math.toRadians(28.0)
-            val barbLen = with(density) { 8.dp.toPx() }
-            val b = bearingRad
-            val barb1 = Offset(
-                tipX - (sin(b + barbAngle) * barbLen).toFloat(),
-                tipY + (cos(b + barbAngle) * barbLen).toFloat(),
+            val barbAng = Math.toRadians(30.0)
+            val barb = with(density) { 7.dp.toPx() }
+            // Compute perpendicular for barbs (rotated relative to arrow direction)
+            val arrowAng = kotlin.math.atan2(northDirY.toDouble(), northDirX.toDouble())
+            drawLine(
+                color = onSurface,
+                start = Offset(northTipX, northTipY),
+                end = Offset(
+                    northTipX - (cos(arrowAng - barbAng) * barb).toFloat(),
+                    northTipY - (sin(arrowAng - barbAng) * barb).toFloat(),
+                ),
+                strokeWidth = 3f,
             )
-            val barb2 = Offset(
-                tipX - (sin(b - barbAngle) * barbLen).toFloat(),
-                tipY + (cos(b - barbAngle) * barbLen).toFloat(),
+            drawLine(
+                color = onSurface,
+                start = Offset(northTipX, northTipY),
+                end = Offset(
+                    northTipX - (cos(arrowAng + barbAng) * barb).toFloat(),
+                    northTipY - (sin(arrowAng + barbAng) * barb).toFloat(),
+                ),
+                strokeWidth = 3f,
             )
-            drawLine(measurementColor, Offset(tipX, tipY), barb1, strokeWidth = 3f)
-            drawLine(measurementColor, Offset(tipX, tipY), barb2, strokeWidth = 3f)
-
-            drawCircle(color = surface, radius = measureRadius + 2f, center = pos)
-            drawCircle(color = measurementColor, radius = measureRadius, center = pos)
-
-            val labelLayout = textMeasurer.measure(mm.positionLabel, labelStyle)
+            val nLabel = textMeasurer.measure(
+                "N",
+                TextStyle(fontSize = 14.sp, color = onSurface, textAlign = TextAlign.Center),
+            )
             drawText(
-                textLayoutResult = labelLayout,
-                topLeft = Offset(pos.x + measureRadius + 4f, pos.y - labelLayout.size.height - 2f),
+                textLayoutResult = nLabel,
+                topLeft = Offset(
+                    northTipX + northDirX * 12f - nLabel.size.width / 2f,
+                    northTipY + northDirY * 12f - nLabel.size.height / 2f,
+                ),
             )
-            val vText = "${"%.2f".format(mm.knots)} kn"
-            val vLayout = textMeasurer.measure(vText, velocityStyle)
+
+            // Wind indicator at top center, points downward (wind comes from the top).
+            if (windFromDeg != null) {
+                val wcx = proj.canvasW / 2f
+                val wTopY = 14f
+                val wBottomY = wTopY + with(density) { 28.dp.toPx() }
+                drawLine(
+                    color = windColor,
+                    start = Offset(wcx, wTopY),
+                    end = Offset(wcx, wBottomY),
+                    strokeWidth = 4f,
+                )
+                val wBarb = with(density) { 7.dp.toPx() }
+                drawLine(
+                    color = windColor,
+                    start = Offset(wcx, wBottomY),
+                    end = Offset(wcx - wBarb, wBottomY - wBarb),
+                    strokeWidth = 4f,
+                )
+                drawLine(
+                    color = windColor,
+                    start = Offset(wcx, wBottomY),
+                    end = Offset(wcx + wBarb, wBottomY - wBarb),
+                    strokeWidth = 4f,
+                )
+                val wLabel = textMeasurer.measure(
+                    "Wind ${windFromDeg.roundToInt()}°",
+                    TextStyle(fontSize = 12.sp, color = windColor, fontWeight = FontWeight.Medium),
+                )
+                drawText(
+                    textLayoutResult = wLabel,
+                    topLeft = Offset(wcx + 10f, wTopY),
+                )
+            }
+
+            // Scale bar bottom-left.
+            val availWMeters = (proj.canvasW - innerPadPx * 2) / proj.scale
+            val scaleBarMeters = chooseScaleBarLength(availWMeters.toDouble())
+            val scaleBarPx = (scaleBarMeters * proj.scale).toFloat()
+            val sbX = innerPadPx / 2
+            val sbY = proj.canvasH - innerPadPx / 2
+            drawLine(color = onSurface, start = Offset(sbX, sbY), end = Offset(sbX + scaleBarPx, sbY), strokeWidth = 3f)
+            drawLine(color = onSurface, start = Offset(sbX, sbY - 6f), end = Offset(sbX, sbY + 6f), strokeWidth = 3f)
+            drawLine(
+                color = onSurface,
+                start = Offset(sbX + scaleBarPx, sbY - 6f),
+                end = Offset(sbX + scaleBarPx, sbY + 6f),
+                strokeWidth = 3f,
+            )
+            val sbLabel = textMeasurer.measure(
+                formatMeters(scaleBarMeters),
+                TextStyle(fontSize = 12.sp, color = onSurface),
+            )
             drawText(
-                textLayoutResult = vLayout,
-                topLeft = Offset(pos.x + measureRadius + 4f, pos.y + 2f),
+                textLayoutResult = sbLabel,
+                topLeft = Offset(sbX, sbY - sbLabel.size.height - 8f),
             )
         }
-
-        // North arrow top-right.
-        val northX = canvasW - padding / 2
-        val northY = padding / 2 + 24f
-        val northLen = with(density) { 24.dp.toPx() }
-        drawLine(
-            color = onSurface,
-            start = Offset(northX, northY + northLen),
-            end = Offset(northX, northY),
-            strokeWidth = 3f,
-        )
-        val barbAng = Math.toRadians(30.0)
-        val barb = with(density) { 8.dp.toPx() }
-        drawLine(
-            color = onSurface,
-            start = Offset(northX, northY),
-            end = Offset(northX - sin(barbAng).toFloat() * barb, northY + cos(barbAng).toFloat() * barb),
-            strokeWidth = 3f,
-        )
-        drawLine(
-            color = onSurface,
-            start = Offset(northX, northY),
-            end = Offset(northX + sin(barbAng).toFloat() * barb, northY + cos(barbAng).toFloat() * barb),
-            strokeWidth = 3f,
-        )
-        val nLabel = textMeasurer.measure(
-            "N",
-            TextStyle(fontSize = 14.sp, color = onSurface, textAlign = TextAlign.Center),
-        )
-        drawText(
-            textLayoutResult = nLabel,
-            topLeft = Offset(northX - nLabel.size.width / 2f, northY - nLabel.size.height - 2f),
-        )
-
-        // Scale bar bottom-left.
-        val scaleBarMeters = chooseScaleBarLength(availW.toDouble() / scale)
-        val scaleBarPx = (scaleBarMeters * scale).toFloat()
-        val sbX = padding / 2
-        val sbY = canvasH - padding / 2
-        drawLine(color = onSurface, start = Offset(sbX, sbY), end = Offset(sbX + scaleBarPx, sbY), strokeWidth = 3f)
-        drawLine(color = onSurface, start = Offset(sbX, sbY - 6f), end = Offset(sbX, sbY + 6f), strokeWidth = 3f)
-        drawLine(
-            color = onSurface,
-            start = Offset(sbX + scaleBarPx, sbY - 6f),
-            end = Offset(sbX + scaleBarPx, sbY + 6f),
-            strokeWidth = 3f,
-        )
-        val sbLabel = textMeasurer.measure(
-            formatMeters(scaleBarMeters),
-            TextStyle(fontSize = 12.sp, color = onSurface),
-        )
-        drawText(
-            textLayoutResult = sbLabel,
-            topLeft = Offset(sbX, sbY - sbLabel.size.height - 8f),
-        )
     }
 }
 

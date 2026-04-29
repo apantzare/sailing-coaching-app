@@ -77,6 +77,7 @@ data class AppData(
     val marks: List<CourseMark> = emptyList(),
     val customMarkLabels: List<String> = emptyList(),
     val customBoatLabels: List<String> = emptyList(),
+    val windFromDeg: Double? = null,
 )
 
 class Repository private constructor(private val file: File) {
@@ -125,6 +126,20 @@ class Repository private constructor(private val file: File) {
 
     fun deleteMark(id: String) {
         data = data.copy(marks = data.marks.filterNot { it.id == id })
+        persist()
+    }
+
+    fun updateMarkPosition(id: String, lat: Double, lng: Double) {
+        val updated = data.marks.map { m ->
+            if (m.id == id) m.copy(lat = lat, lng = lng) else m
+        }
+        data = data.copy(marks = updated)
+        persist()
+    }
+
+    fun setWindDirection(deg: Double?) {
+        val normalized = deg?.let { ((it % 360) + 360) % 360 }
+        data = data.copy(windFromDeg = normalized)
         persist()
     }
 
