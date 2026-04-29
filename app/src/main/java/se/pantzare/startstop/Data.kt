@@ -19,6 +19,35 @@ val DEFAULT_LABELS = listOf(
     "Under startline",
 )
 
+val DEFAULT_MARK_LABELS = listOf(
+    "Upwind mark",
+    "Pin end",
+    "Gate left",
+    "Gate right",
+    "Reaching mark",
+    "Wing mark",
+)
+
+val DEFAULT_BOAT_LABELS = listOf(
+    "Committee boat",
+    "Coach boat",
+    "Mark boat",
+)
+
+@Serializable
+enum class MarkKind { MARK, BOAT }
+
+@Serializable
+data class CourseMark(
+    val id: String = UUID.randomUUID().toString(),
+    val kind: MarkKind,
+    val label: String,
+    val lat: Double,
+    val lng: Double,
+    val accuracyM: Double,
+    val timestampMs: Long,
+)
+
 @Serializable
 data class SavedMeasurement(
     val id: String = UUID.randomUUID().toString(),
@@ -45,6 +74,9 @@ data class SavedMeasurement(
 data class AppData(
     val measurements: List<SavedMeasurement> = emptyList(),
     val customLabels: List<String> = emptyList(),
+    val marks: List<CourseMark> = emptyList(),
+    val customMarkLabels: List<String> = emptyList(),
+    val customBoatLabels: List<String> = emptyList(),
 )
 
 class Repository private constructor(private val file: File) {
@@ -83,6 +115,32 @@ class Repository private constructor(private val file: File) {
 
     fun deleteCustomLabel(label: String) {
         data = data.copy(customLabels = data.customLabels.filterNot { it == label })
+        persist()
+    }
+
+    fun addMark(mark: CourseMark) {
+        data = data.copy(marks = data.marks + mark)
+        persist()
+    }
+
+    fun deleteMark(id: String) {
+        data = data.copy(marks = data.marks.filterNot { it.id == id })
+        persist()
+    }
+
+    fun addCustomMarkLabel(label: String) {
+        val trimmed = label.trim()
+        if (trimmed.isEmpty()) return
+        if (trimmed in DEFAULT_MARK_LABELS || trimmed in data.customMarkLabels) return
+        data = data.copy(customMarkLabels = data.customMarkLabels + trimmed)
+        persist()
+    }
+
+    fun addCustomBoatLabel(label: String) {
+        val trimmed = label.trim()
+        if (trimmed.isEmpty()) return
+        if (trimmed in DEFAULT_BOAT_LABELS || trimmed in data.customBoatLabels) return
+        data = data.copy(customBoatLabels = data.customBoatLabels + trimmed)
         persist()
     }
 

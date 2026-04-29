@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -83,6 +84,7 @@ private fun App() {
     }
 
     val repository = remember { Repository.get(context) }
+    val location = rememberLocationStream()
     var tab by remember { mutableStateOf(Tab.Measure) }
 
     Scaffold(
@@ -99,14 +101,14 @@ private fun App() {
             }
         }
     ) { padding ->
-        Surface(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            color = MaterialTheme.colorScheme.background,
-        ) {
-            when (tab) {
-                Tab.Measure -> MeasureScreen(repository)
-                Tab.History -> HistoryScreen(repository)
-                Tab.Course -> CourseScreen(repository)
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            GpsHeader(location.value)
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (tab) {
+                    Tab.Measure -> MeasureScreen(repository, location)
+                    Tab.History -> HistoryScreen(repository)
+                    Tab.Course -> CourseScreen(repository, location)
+                }
             }
         }
     }

@@ -84,45 +84,40 @@ private sealed interface MeasureUiState {
 }
 
 @Composable
-fun MeasureScreen(repository: Repository) {
-    val location = rememberLocationStream()
+fun MeasureScreen(repository: Repository, location: State<Location?>) {
     var state by remember { mutableStateOf<MeasureUiState>(MeasureUiState.Idle) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        GpsHeader(location.value)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            when (val s = state) {
-                is MeasureUiState.Idle -> IdleView(
-                    fixAvailable = location.value != null,
-                    onStart = {
-                        val current = location.value ?: return@IdleView
-                        state = MeasureUiState.Tracking(current, System.currentTimeMillis())
-                    },
-                )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        when (val s = state) {
+            is MeasureUiState.Idle -> IdleView(
+                fixAvailable = location.value != null,
+                onStart = {
+                    val current = location.value ?: return@IdleView
+                    state = MeasureUiState.Tracking(current, System.currentTimeMillis())
+                },
+            )
 
-                is MeasureUiState.Tracking -> TrackingView(
-                    startWallMs = s.startWallMs,
-                    onStop = {
-                        val stop = location.value ?: return@TrackingView
-                        state = MeasureUiState.Done(
-                            computeResult(s.start, s.startWallMs, stop, System.currentTimeMillis())
-                        )
-                    },
-                )
+            is MeasureUiState.Tracking -> TrackingView(
+                startWallMs = s.startWallMs,
+                onStop = {
+                    val stop = location.value ?: return@TrackingView
+                    state = MeasureUiState.Done(
+                        computeResult(s.start, s.startWallMs, stop, System.currentTimeMillis())
+                    )
+                },
+            )
 
-                is MeasureUiState.Done -> DoneView(
-                    result = s.result,
-                    repository = repository,
-                    onCleared = { state = MeasureUiState.Idle },
-                )
-            }
+            is MeasureUiState.Done -> DoneView(
+                result = s.result,
+                repository = repository,
+                onCleared = { state = MeasureUiState.Idle },
+            )
         }
     }
 }
