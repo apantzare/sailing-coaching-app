@@ -48,7 +48,6 @@ data class CourseMark(
     val lng: Double,
     val accuracyM: Double,
     val timestampMs: Long,
-    val headingDeg: Double = 0.0,
 )
 
 @Serializable
@@ -135,15 +134,6 @@ class Repository private constructor(private val file: File) {
     fun updateMarkPosition(id: String, lat: Double, lng: Double) {
         val updated = data.marks.map { m ->
             if (m.id == id) m.copy(lat = lat, lng = lng) else m
-        }
-        data = data.copy(marks = updated)
-        persist()
-    }
-
-    fun updateMarkHeading(id: String, headingDeg: Double) {
-        val normalized = ((headingDeg % 360) + 360) % 360
-        val updated = data.marks.map { m ->
-            if (m.id == id) m.copy(headingDeg = normalized) else m
         }
         data = data.copy(marks = updated)
         persist()
