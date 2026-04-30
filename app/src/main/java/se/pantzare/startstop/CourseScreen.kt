@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -41,6 +42,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -122,7 +127,9 @@ fun CourseScreen(repository: Repository, location: State<Location?>) {
     if (showManage) {
         ManageMarksDialog(
             marks = marks,
+            windFromDeg = windFromDeg,
             onDelete = { repository.deleteMark(it) },
+            onRotate = { id, deg -> repository.updateMarkHeading(id, deg) },
             onDismiss = { showManage = false },
         )
     }
@@ -403,9 +410,13 @@ private fun TextEntryDialogLocal(
 @Composable
 private fun ManageMarksDialog(
     marks: List<CourseMark>,
+    windFromDeg: Double?,
     onDelete: (String) -> Unit,
+    onRotate: (id: String, deg: Double) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var rotating by remember { mutableStateOf<CourseMark?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Marks & boats") },
@@ -428,7 +439,17 @@ private fun ManageMarksDialog(
                                         "${if (m.kind == MarkKind.MARK) "Mark" else "Boat"}: ${m.label}",
                                         fontWeight = FontWeight.Medium,
                                     )
-                                    Text("±${m.accuracyM.roundToInt()} m original GPS", fontSize = 12.sp)
+                                    val detail = if (m.kind == MarkKind.BOAT) {
+                                        "±${m.accuracyM.roundToInt()} m GPS · heading ${m.headingDeg.roundToInt()}°"
+                                    } else {
+                                        "±${m.accuracyM.roundToInt()} m original GPS"
+                                    }
+                                    Text(detail, fontSize = 12.sp)
+                                }
+                                if (m.kind == MarkKind.BOAT) {
+                                    IconButton(onClick = { rotating = m }) {
+                                        Icon(Icons.Filled.Refresh, contentDescription = "Rotate")
+                                    }
                                 }
                                 IconButton(onClick = { onDelete(m.id) }) {
                                     Icon(Icons.Filled.Delete, contentDescription = "Delete")
@@ -441,6 +462,105 @@ private fun ManageMarksDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+
+    rotating?.let { boat ->
+        RotateBoatDialog(
+            boat = boat,
+            windFromDeg = windFromDeg,
+            onDismiss = { rotating = null },
+            onSave = { deg ->
+                onRotate(boat.id, deg)
+                rotating = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun RotateBoatDialog(
+    boat: CourseMark,
+    windFromDeg: Double?,
+    onDismiss: () -> Unit,
+    onSave: (Double) -> Unit,
+) {
+    var text by remember { mutableStateOf(boat.headingDeg.roundToInt().toString()) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun setDeg(d: Double) {
+        val n = ((d % 360) + 360) % 360
+        text = n.roundToInt().toString()
+        error = null
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rotate ${boat.label}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Compass bearing the bow points to (0–360°, true north).",
+                    fontSize = 13.sp,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it.filter { c -> c.isDigit() || c == '.' }
+                        error = null
+                    },
+                    singleLine = true,
+                    label = { Text("Heading °") },
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Done,
+                        keyboardType = KeyboardType.Number,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (windFromDeg != null) {
+                    Text("Quick presets (relative to wind):", fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { setDeg(windFromDeg + 90.0) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("⊥ wind") }
+                        OutlinedButton(
+                            onClick = { setDeg(windFromDeg - 90.0) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("⊥ wind ↺") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { setDeg(windFromDeg + 180.0) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Bow downwind") }
+                        OutlinedButton(
+                            onClick = { setDeg(windFromDeg) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Bow upwind") }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { setDeg(0.0) }, modifier = Modifier.weight(1f)) { Text("N") }
+                    OutlinedButton(onClick = { setDeg(90.0) }, modifier = Modifier.weight(1f)) { Text("E") }
+                    OutlinedButton(onClick = { setDeg(180.0) }, modifier = Modifier.weight(1f)) { Text("S") }
+                    OutlinedButton(onClick = { setDeg(270.0) }, modifier = Modifier.weight(1f)) { Text("W") }
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val parsed = text.toDoubleOrNull()
+                if (parsed == null || parsed < 0.0 || parsed > 360.0) {
+                    error = "Enter a number between 0 and 360"
+                } else {
+                    onSave(parsed)
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }
@@ -557,6 +677,8 @@ private fun CourseCanvas(
     val markColor = Color(0xFFFF9800)
     val boatColor = Color(0xFF455A64)
     val windColor = Color(0xFF1976D2)
+    val committeeFlagColor = Color(0xFFFF6F00)
+    val finishFlagColor = Color(0xFF1565C0)
 
     val innerPadPx = 60f
     val hitRadiusPx = with(density) { 28.dp.toPx() }
@@ -645,20 +767,103 @@ private fun CourseCanvas(
                     MarkKind.MARK -> {
                         drawCircle(color = surface, radius = markRadius + 2f + highlightBoost, center = pos)
                         drawCircle(color = markColor, radius = markRadius + highlightBoost, center = pos)
+                        if (m.label == "Pin end" || m.label == "Finish line") {
+                            val poleH = with(density) { 22.dp.toPx() }
+                            val flagW = with(density) { 12.dp.toPx() }
+                            val flagH = with(density) { 9.dp.toPx() }
+                            val poleX = pos.x
+                            val poleBaseY = pos.y - markRadius - highlightBoost
+                            val poleTopY = poleBaseY - poleH
+                            drawLine(
+                                color = onSurface,
+                                start = Offset(poleX, poleBaseY),
+                                end = Offset(poleX, poleTopY),
+                                strokeWidth = 2f,
+                            )
+                            val flagPath = Path().apply {
+                                moveTo(poleX, poleTopY)
+                                lineTo(poleX + flagW, poleTopY + flagH * 0.4f)
+                                lineTo(poleX, poleTopY + flagH)
+                                close()
+                            }
+                            drawPath(
+                                path = flagPath,
+                                color = surface,
+                                style = Stroke(width = 3f, join = StrokeJoin.Round),
+                            )
+                            drawPath(path = flagPath, color = committeeFlagColor)
+                        }
                     }
                     MarkKind.BOAT -> {
-                        val w = with(density) { 22.dp.toPx() } + highlightBoost
-                        val h = with(density) { 10.dp.toPx() } + highlightBoost
-                        drawRect(
-                            color = surface,
-                            topLeft = Offset(pos.x - w / 2 - 2f, pos.y - h / 2 - 2f),
-                            size = Size(w + 4f, h + 4f),
-                        )
-                        drawRect(
-                            color = boatColor,
-                            topLeft = Offset(pos.x - w / 2, pos.y - h / 2),
-                            size = Size(w, h),
-                        )
+                        val length = with(density) { 30.dp.toPx() } + highlightBoost
+                        val beam = with(density) { 12.dp.toPx() } + highlightBoost
+                        // In local coords, bow points up (toward -Y). Heading is true bearing,
+                        // and the canvas is rotated by `rotationDeg` (wind from up), so
+                        // the bow's screen angle = headingDeg - rotationDeg.
+                        val screenHeadingDeg = (m.headingDeg - rotationDeg).toFloat()
+                        val flagColor = when (m.label) {
+                            "Committee boat" -> committeeFlagColor
+                            "Finish boat" -> finishFlagColor
+                            else -> null
+                        }
+
+                        rotate(degrees = screenHeadingDeg, pivot = pos) {
+                            val bowY = pos.y - length * 0.5f
+                            val shoulderY = pos.y - length * 0.25f
+                            val sternY = pos.y + length * 0.5f
+                            val cabinHalf = beam * 0.28f
+                            val cabinY1 = pos.y - length * 0.05f
+                            val cabinY2 = pos.y + length * 0.22f
+
+                            val hull = Path().apply {
+                                moveTo(pos.x, bowY)
+                                lineTo(pos.x + beam / 2f, shoulderY)
+                                lineTo(pos.x + beam / 2f, sternY)
+                                lineTo(pos.x - beam / 2f, sternY)
+                                lineTo(pos.x - beam / 2f, shoulderY)
+                                close()
+                            }
+                            // Outline halo for contrast.
+                            drawPath(
+                                path = hull,
+                                color = surface,
+                                style = Stroke(width = 5f, join = StrokeJoin.Round),
+                            )
+                            drawPath(path = hull, color = boatColor)
+
+                            // Cabin highlight.
+                            drawRect(
+                                color = surface.copy(alpha = 0.55f),
+                                topLeft = Offset(pos.x - cabinHalf, cabinY1),
+                                size = Size(cabinHalf * 2f, cabinY2 - cabinY1),
+                            )
+
+                            // Mast + flag (only for committee / finish boats).
+                            if (flagColor != null) {
+                                val mastTopY = bowY - length * 0.45f
+                                val mastBaseY = pos.y - length * 0.05f
+                                drawLine(
+                                    color = onSurface,
+                                    start = Offset(pos.x, mastBaseY),
+                                    end = Offset(pos.x, mastTopY),
+                                    strokeWidth = 2f,
+                                )
+                                val flagW = beam * 0.9f
+                                val flagH = length * 0.22f
+                                val flagPath = Path().apply {
+                                    moveTo(pos.x, mastTopY)
+                                    lineTo(pos.x + flagW, mastTopY + flagH * 0.3f)
+                                    lineTo(pos.x, mastTopY + flagH)
+                                    close()
+                                }
+                                drawPath(
+                                    path = flagPath,
+                                    color = surface,
+                                    style = Stroke(width = 3f, join = StrokeJoin.Round),
+                                )
+                                drawPath(path = flagPath, color = flagColor)
+                            }
+                        }
                     }
                 }
                 val labelLayout = textMeasurer.measure(m.label, labelStyle)
