@@ -73,6 +73,13 @@ data class SavedMeasurement(
 )
 
 @Serializable
+data class WindReading(
+    val id: String = UUID.randomUUID().toString(),
+    val timestampMs: Long,
+    val directionDeg: Double,
+)
+
+@Serializable
 data class AppData(
     val measurements: List<SavedMeasurement> = emptyList(),
     val customLabels: List<String> = emptyList(),
@@ -80,6 +87,7 @@ data class AppData(
     val customMarkLabels: List<String> = emptyList(),
     val customBoatLabels: List<String> = emptyList(),
     val windFromDeg: Double? = null,
+    val windReadings: List<WindReading> = emptyList(),
 )
 
 class Repository private constructor(private val file: File) {
@@ -136,6 +144,18 @@ class Repository private constructor(private val file: File) {
             if (m.id == id) m.copy(lat = lat, lng = lng) else m
         }
         data = data.copy(marks = updated)
+        persist()
+    }
+
+    fun addWindReading(directionDeg: Double, timestampMs: Long = System.currentTimeMillis()) {
+        val normalized = ((directionDeg % 360) + 360) % 360
+        val reading = WindReading(timestampMs = timestampMs, directionDeg = normalized)
+        data = data.copy(windReadings = data.windReadings + reading)
+        persist()
+    }
+
+    fun deleteWindReading(id: String) {
+        data = data.copy(windReadings = data.windReadings.filterNot { it.id == id })
         persist()
     }
 

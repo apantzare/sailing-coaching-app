@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +62,7 @@ private enum class Tab(val title: String, val icon: ImageVector) {
     Measure("Measure", Icons.Filled.LocationOn),
     History("History", Icons.AutoMirrored.Filled.List),
     Course("Course", Icons.Filled.Place),
+    Wind("Wind", Icons.Filled.Refresh),
 }
 
 @Composable
@@ -108,6 +110,7 @@ private fun App() {
                     Tab.Measure -> MeasureScreen(repository, location)
                     Tab.History -> HistoryScreen(repository)
                     Tab.Course -> CourseScreen(repository, location)
+                    Tab.Wind -> WindScreen(repository)
                 }
             }
         }
