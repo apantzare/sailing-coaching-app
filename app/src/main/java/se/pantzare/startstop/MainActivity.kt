@@ -88,6 +88,7 @@ private fun App() {
     val repository = remember { Repository.get(context) }
     val location = rememberLocationStream()
     var tab by remember { mutableStateOf(Tab.Measure) }
+    var measureState by remember { mutableStateOf<MeasureUiState>(MeasureUiState.Idle) }
 
     Scaffold(
         bottomBar = {
@@ -107,7 +108,7 @@ private fun App() {
             GpsHeader(location.value)
             Box(modifier = Modifier.fillMaxSize()) {
                 when (tab) {
-                    Tab.Measure -> MeasureScreen(repository, location)
+                    Tab.Measure -> MeasureScreen(repository, location, measureState) { measureState = it }
                     Tab.History -> HistoryScreen(repository)
                     Tab.Course -> CourseScreen(repository, location)
                     Tab.Wind -> WindScreen(repository)

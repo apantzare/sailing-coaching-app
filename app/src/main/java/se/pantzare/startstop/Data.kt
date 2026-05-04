@@ -116,6 +116,15 @@ class Repository private constructor(private val file: File) {
         persist()
     }
 
+    fun updateMeasurementLabel(id: String, label: String) {
+        val trimmed = label.trim()
+        val updated = data.measurements.map { m ->
+            if (m.id == id) m.copy(positionLabel = trimmed) else m
+        }
+        data = data.copy(measurements = updated)
+        persist()
+    }
+
     fun addCustomLabel(label: String) {
         val trimmed = label.trim()
         if (trimmed.isEmpty()) return

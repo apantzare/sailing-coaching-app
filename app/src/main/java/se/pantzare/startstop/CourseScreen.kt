@@ -765,7 +765,7 @@ private fun CourseCanvas(
                 val pos = proj.project(mm.startLat, mm.startLng)
                 val ratio = (mm.knots / maxKnots).toFloat().coerceIn(0f, 1f)
                 val arrowLen = (minArrowPx + ratio * (maxArrowPx - minArrowPx))
-                val bearingRad = Math.toRadians(mm.bearingDeg)
+                val bearingRad = Math.toRadians(mm.bearingDeg + 180.0)
                 val tipX = pos.x + (sin(bearingRad) * arrowLen).toFloat()
                 val tipY = pos.y - (cos(bearingRad) * arrowLen).toFloat()
 

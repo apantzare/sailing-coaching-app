@@ -61,32 +61,19 @@ import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-private data class TransientResult(
-    val start: Location,
-    val stop: Location,
-    val startWallMs: Long,
-    val stopWallMs: Long,
-    val distanceM: Double,
-    val distanceSigmaM: Double,
-    val bearingDeg: Double,
-    val bearingSigmaDeg: Double,
-    val mPerMin: Double,
-    val mPerMinSigma: Double,
-    val knots: Double,
-    val knotsSigma: Double,
-    val elapsedS: Double,
-)
-
-private sealed interface MeasureUiState {
+sealed interface MeasureUiState {
     data object Idle : MeasureUiState
     data class Tracking(val start: Location, val startWallMs: Long) : MeasureUiState
-    data class Done(val result: TransientResult) : MeasureUiState
+    data class Done(val savedId: String) : MeasureUiState
 }
 
 @Composable
-fun MeasureScreen(repository: Repository, location: State<Location?>) {
-    var state by remember { mutableStateOf<MeasureUiState>(MeasureUiState.Idle) }
-
+fun MeasureScreen(
+    repository: Repository,
+    location: State<Location?>,
+    state: MeasureUiState,
+    onStateChange: (MeasureUiState) -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -99,7 +86,7 @@ fun MeasureScreen(repository: Repository, location: State<Location?>) {
                 fixAvailable = location.value != null,
                 onStart = {
                     val current = location.value ?: return@IdleView
-                    state = MeasureUiState.Tracking(current, System.currentTimeMillis())
+                    onStateChange(MeasureUiState.Tracking(current, System.currentTimeMillis()))
                 },
             )
 
@@ -107,17 +94,24 @@ fun MeasureScreen(repository: Repository, location: State<Location?>) {
                 startWallMs = s.startWallMs,
                 onStop = {
                     val stop = location.value ?: return@TrackingView
-                    state = MeasureUiState.Done(
-                        computeResult(s.start, s.startWallMs, stop, System.currentTimeMillis())
-                    )
+                    val saved = computeResult(s.start, s.startWallMs, stop, System.currentTimeMillis())
+                    repository.addMeasurement(saved)
+                    onStateChange(MeasureUiState.Done(savedId = saved.id))
                 },
             )
 
-            is MeasureUiState.Done -> DoneView(
-                result = s.result,
-                repository = repository,
-                onCleared = { state = MeasureUiState.Idle },
-            )
+            is MeasureUiState.Done -> {
+                val saved = repository.data.measurements.firstOrNull { it.id == s.savedId }
+                if (saved == null) {
+                    LaunchedEffect(s.savedId) { onStateChange(MeasureUiState.Idle) }
+                } else {
+                    DoneView(
+                        saved = saved,
+                        repository = repository,
+                        onCleared = { onStateChange(MeasureUiState.Idle) },
+                    )
+                }
+            }
         }
     }
 }
@@ -162,25 +156,25 @@ private fun TrackingView(startWallMs: Long, onStop: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DoneView(
-    result: TransientResult,
+    saved: SavedMeasurement,
     repository: Repository,
     onCleared: () -> Unit,
 ) {
-    var selectedLabel by remember { mutableStateOf<String?>(null) }
     var showFreeTextDialog by remember { mutableStateOf(false) }
     var showAddLabelDialog by remember { mutableStateOf(false) }
-    var freeTextValue by remember { mutableStateOf("") }
 
     val customLabels = repository.data.customLabels
+    val currentLabel = saved.positionLabel
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
+        Text("Saved", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Direction", fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(
-                "${cardinal(result.bearingDeg)}  ${result.bearingDeg.roundToInt()}° ± ${result.bearingSigmaDeg.roundToInt()}°",
+                "${cardinal(saved.bearingDeg)}  ${saved.bearingDeg.roundToInt()}° ± ${saved.bearingSigmaDeg.roundToInt()}°",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -191,19 +185,24 @@ private fun DoneView(
         ) {
             Text("Velocity", fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(
-                "${"%.1f".format(result.mPerMin)} ± ${"%.1f".format(result.mPerMinSigma)} m/min",
+                "${"%.1f".format(saved.mPerMin)} ± ${"%.1f".format(saved.mPerMinSigma)} m/min",
                 fontSize = 22.sp,
             )
             Text(
-                "${"%.2f".format(result.knots)} ± ${"%.2f".format(result.knotsSigma)} knots",
+                "${"%.2f".format(saved.knots)} ± ${"%.2f".format(saved.knotsSigma)} knots",
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
             )
         }
-        Text("elapsed ${formatElapsed(result.elapsedS)}")
+        Text("elapsed ${formatElapsed(saved.elapsedS)}")
 
         Spacer(Modifier.height(8.dp))
-        Text("Label this measurement", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Text(
+            text = if (currentLabel.isEmpty()) "Pick a label (or set later from History)"
+            else "Label: $currentLabel",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+        )
 
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -212,15 +211,15 @@ private fun DoneView(
         ) {
             DEFAULT_LABELS.forEach { label ->
                 FilterChip(
-                    selected = selectedLabel == label,
-                    onClick = { selectedLabel = label },
+                    selected = currentLabel == label,
+                    onClick = { repository.updateMeasurementLabel(saved.id, label) },
                     label = { Text(label) },
                 )
             }
             customLabels.forEach { label ->
                 FilterChip(
-                    selected = selectedLabel == label,
-                    onClick = { selectedLabel = label },
+                    selected = currentLabel == label,
+                    onClick = { repository.updateMeasurementLabel(saved.id, label) },
                     label = { Text(label) },
                 )
             }
@@ -231,27 +230,17 @@ private fun DoneView(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(
-                onClick = {
-                    freeTextValue = ""
-                    showFreeTextDialog = true
-                },
+                onClick = { showFreeTextDialog = true },
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Free text")
             }
             OutlinedButton(
-                onClick = {
-                    freeTextValue = ""
-                    showAddLabelDialog = true
-                },
+                onClick = { showAddLabelDialog = true },
                 modifier = Modifier.weight(1f),
             ) {
                 Text("+ New label")
             }
-        }
-
-        selectedLabel?.takeIf { it !in DEFAULT_LABELS && it !in customLabels }?.let {
-            Text("Selected: $it", fontWeight = FontWeight.Medium)
         }
 
         Row(
@@ -259,18 +248,16 @@ private fun DoneView(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Button(
-                onClick = {
-                    val label = selectedLabel ?: return@Button
-                    repository.addMeasurement(toSaved(result, label))
-                    onCleared()
-                },
-                enabled = selectedLabel != null,
+                onClick = onCleared,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Save")
+                Text("Done")
             }
             OutlinedButton(
-                onClick = onCleared,
+                onClick = {
+                    repository.deleteMeasurement(saved.id)
+                    onCleared()
+                },
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Discard")
@@ -282,10 +269,13 @@ private fun DoneView(
         TextEntryDialog(
             title = "Free text label",
             description = "Used for this measurement only.",
-            initialValue = freeTextValue,
+            initialValue = "",
             onDismiss = { showFreeTextDialog = false },
             onConfirm = { value ->
-                if (value.isNotBlank()) selectedLabel = value.trim()
+                val trimmed = value.trim()
+                if (trimmed.isNotEmpty()) {
+                    repository.updateMeasurementLabel(saved.id, trimmed)
+                }
                 showFreeTextDialog = false
             },
         )
@@ -295,13 +285,13 @@ private fun DoneView(
         TextEntryDialog(
             title = "Add new label",
             description = "Will be saved for next time.",
-            initialValue = freeTextValue,
+            initialValue = "",
             onDismiss = { showAddLabelDialog = false },
             onConfirm = { value ->
                 val trimmed = value.trim()
                 if (trimmed.isNotEmpty()) {
                     repository.addCustomLabel(trimmed)
-                    selectedLabel = trimmed
+                    repository.updateMeasurementLabel(saved.id, trimmed)
                 }
                 showAddLabelDialog = false
             },
@@ -418,7 +408,7 @@ private fun computeResult(
     startWallMs: Long,
     stop: Location,
     stopWallMs: Long,
-): TransientResult {
+): SavedMeasurement {
     val results = FloatArray(2)
     Location.distanceBetween(start.latitude, start.longitude, stop.latitude, stop.longitude, results)
     val distance = results[0].toDouble()
@@ -441,11 +431,15 @@ private fun computeResult(
     val mPerMinSig = acc / (elapsedS / 60.0)
     val knotsSig = (acc / elapsedS) * 1.94384
 
-    return TransientResult(
-        start = start,
-        stop = stop,
-        startWallMs = startWallMs,
-        stopWallMs = stopWallMs,
+    return SavedMeasurement(
+        timestampMs = stopWallMs,
+        positionLabel = "",
+        startLat = start.latitude,
+        startLng = start.longitude,
+        startAccuracyM = start.accuracy.toDouble(),
+        stopLat = stop.latitude,
+        stopLng = stop.longitude,
+        stopAccuracyM = stop.accuracy.toDouble(),
         distanceM = distance,
         distanceSigmaM = acc,
         bearingDeg = bearing,
@@ -458,24 +452,3 @@ private fun computeResult(
     )
 }
 
-private fun toSaved(result: TransientResult, label: String): SavedMeasurement {
-    return SavedMeasurement(
-        timestampMs = result.stopWallMs,
-        positionLabel = label,
-        startLat = result.start.latitude,
-        startLng = result.start.longitude,
-        startAccuracyM = result.start.accuracy.toDouble(),
-        stopLat = result.stop.latitude,
-        stopLng = result.stop.longitude,
-        stopAccuracyM = result.stop.accuracy.toDouble(),
-        distanceM = result.distanceM,
-        distanceSigmaM = result.distanceSigmaM,
-        bearingDeg = result.bearingDeg,
-        bearingSigmaDeg = result.bearingSigmaDeg,
-        mPerMin = result.mPerMin,
-        mPerMinSigma = result.mPerMinSigma,
-        knots = result.knots,
-        knotsSigma = result.knotsSigma,
-        elapsedS = result.elapsedS,
-    )
-}
