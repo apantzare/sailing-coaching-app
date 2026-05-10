@@ -564,7 +564,7 @@ private fun CourseCanvas(
     val committeeFlagColor = Color(0xFFFF6F00)
     val finishFlagColor = Color(0xFF1565C0)
 
-    val innerPadPx = 60f
+    val innerPadPx = with(density) { 112.dp.toPx() }
     val hitRadiusPx = with(density) { 28.dp.toPx() }
     val rotationDeg = windFromDeg ?: 0.0
 
@@ -634,9 +634,15 @@ private fun CourseCanvas(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val proj = projection ?: return@Canvas
 
-            val maxKnots = measurements.maxOfOrNull { it.knots }?.coerceAtLeast(0.01) ?: 1.0
+            val slowThresholdMPerMin = 5.0
+            val maxMPerMin = measurements
+                .filter { it.mPerMin >= slowThresholdMPerMin }
+                .maxOfOrNull { it.mPerMin }
+                ?.coerceAtLeast(slowThresholdMPerMin + 0.01)
+                ?: (slowThresholdMPerMin + 1.0)
             val maxArrowPx = with(density) { 80.dp.toPx() }
-            val minArrowPx = with(density) { 16.dp.toPx() }
+            val minArrowPx = with(density) { 4.dp.toPx() }
+            val slowRingPx = with(density) { 7.dp.toPx() }
             val measureRadius = with(density) { 5.dp.toPx() }
             val markRadius = with(density) { 8.dp.toPx() }
             val labelStyle = TextStyle(fontSize = 12.sp, color = onSurface)
@@ -763,31 +769,45 @@ private fun CourseCanvas(
             // Measurements with arrows on top.
             measurements.forEach { mm ->
                 val pos = proj.project(mm.startLat, mm.startLng)
-                val ratio = (mm.knots / maxKnots).toFloat().coerceIn(0f, 1f)
-                val arrowLen = (minArrowPx + ratio * (maxArrowPx - minArrowPx))
-                val bearingRad = Math.toRadians(mm.bearingDeg + 180.0 - rotationDeg)
-                val tipX = pos.x + (sin(bearingRad) * arrowLen).toFloat()
-                val tipY = pos.y - (cos(bearingRad) * arrowLen).toFloat()
 
-                drawLine(
-                    color = measurementColor,
-                    start = pos,
-                    end = Offset(tipX, tipY),
-                    strokeWidth = 3f,
-                )
-                val barbAngle = Math.toRadians(28.0)
-                val barbLen = with(density) { 8.dp.toPx() }
-                val b = bearingRad
-                val barb1 = Offset(
-                    tipX - (sin(b + barbAngle) * barbLen).toFloat(),
-                    tipY + (cos(b + barbAngle) * barbLen).toFloat(),
-                )
-                val barb2 = Offset(
-                    tipX - (sin(b - barbAngle) * barbLen).toFloat(),
-                    tipY + (cos(b - barbAngle) * barbLen).toFloat(),
-                )
-                drawLine(measurementColor, Offset(tipX, tipY), barb1, strokeWidth = 3f)
-                drawLine(measurementColor, Offset(tipX, tipY), barb2, strokeWidth = 3f)
+                if (mm.mPerMin < slowThresholdMPerMin) {
+                    drawCircle(color = surface, radius = slowRingPx + 2f, center = pos)
+                    drawCircle(
+                        color = measurementColor,
+                        radius = slowRingPx,
+                        center = pos,
+                        style = Stroke(width = 2.5f),
+                    )
+                } else {
+                    val span = (maxMPerMin - slowThresholdMPerMin).coerceAtLeast(0.01)
+                    val ratio = ((mm.mPerMin - slowThresholdMPerMin) / span)
+                        .toFloat().coerceIn(0f, 1f)
+                    val arrowLen = minArrowPx + ratio * (maxArrowPx - minArrowPx)
+                    // bearingDeg points where the buoy drifted, i.e. the current's flow direction.
+                    val bearingRad = Math.toRadians(mm.bearingDeg - rotationDeg)
+                    val tipX = pos.x + (sin(bearingRad) * arrowLen).toFloat()
+                    val tipY = pos.y - (cos(bearingRad) * arrowLen).toFloat()
+
+                    drawLine(
+                        color = measurementColor,
+                        start = pos,
+                        end = Offset(tipX, tipY),
+                        strokeWidth = 3f,
+                    )
+                    val barbAngle = Math.toRadians(28.0)
+                    val barbLen = with(density) { 8.dp.toPx() }
+                    val b = bearingRad
+                    val barb1 = Offset(
+                        tipX - (sin(b + barbAngle) * barbLen).toFloat(),
+                        tipY + (cos(b + barbAngle) * barbLen).toFloat(),
+                    )
+                    val barb2 = Offset(
+                        tipX - (sin(b - barbAngle) * barbLen).toFloat(),
+                        tipY + (cos(b - barbAngle) * barbLen).toFloat(),
+                    )
+                    drawLine(measurementColor, Offset(tipX, tipY), barb1, strokeWidth = 3f)
+                    drawLine(measurementColor, Offset(tipX, tipY), barb2, strokeWidth = 3f)
+                }
 
                 drawCircle(color = surface, radius = measureRadius + 2f, center = pos)
                 drawCircle(color = measurementColor, radius = measureRadius, center = pos)
