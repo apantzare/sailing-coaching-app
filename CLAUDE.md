@@ -27,7 +27,12 @@ analysis if available, and let CI confirm.
 
 ## Git
 
-The remote is `https://github.com/apantzare/sailing-coaching-app.git`. If
-`gh` is logged into multiple accounts (e.g. `apantzare` + `axelviking`),
-run `gh auth switch --user apantzare` before pushing or opening PRs —
-`axelviking` cannot see this repo.
+The remote uses the `github-personal` SSH alias
+(`git@github-personal:apantzare/sailing-coaching-app.git`), which keys to
+`~/.ssh/id_ed25519_github_personal`. `git fetch / push` works without any
+account switching.
+
+For `gh` CLI commands (PR/issue/check operations) the active account still
+matters — if `gh auth status` shows `axelviking` active, run
+`gh auth switch --user apantzare` first, since `axelviking` can't see this
+repo.
